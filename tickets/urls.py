@@ -6,7 +6,8 @@ from tickets.views import (ArchiveTicketAPIView, MaintenanceTicketCreateView,
                            TicketReplyCreateView, UpdateTicketAPIView)
 
 from .views import (DashboardAPIView, MaintenanceTicketCreateView,
-                    NewUserTicketCreateView, TicketReplyCreateView)
+                    NewUserTicketCreateView,
+                    TicketReplyCreateView)
 
 urlpatterns = [
     path("new-user/", NewUserTicketCreateView.as_view()),

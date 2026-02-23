@@ -1,24 +1,60 @@
 import json
 
+import django_filters
 from django.shortcuts import get_object_or_404
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.generics import ListAPIView
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from customers.models import Customer
 from customers.serializers import CustomerListSerializer
 from livetrack1.services.authorization_service import AuthorizationService
-from ticket_replies.models import TicketReply, TicketReplyAttachment
+from ticket_replies.models import TicketReplyAttachment
 from tickets.models import Ticket
 from tickets.serializers import TicketCardSerializer, TicketUpdateSerializer
 from tickets.services.ticket_service import TicketService
 
 from .serializers import MaintenanceTicketSerializer, TicketResponseSerializer
-from .services.ticket_service import TicketService
 
+# ============================================================
+# Filtering
+# ============================================================
+
+class TicketFilter(django_filters.FilterSet):
+
+    created_from = django_filters.DateFilter(
+        field_name="created_at",
+        lookup_expr="gte"
+    )
+
+    created_to = django_filters.DateFilter(
+        field_name="created_at",
+        lookup_expr="lte"
+    )
+
+    class Meta:
+        model = Ticket
+        fields = ["status", "priority", "ticket_type"]
+
+
+# ============================================================
+# Pagination
+# ============================================================
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+# ============================================================
+# CREATE NEW USER
+# ============================================================
 
 class NewUserTicketCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -27,24 +63,12 @@ class NewUserTicketCreateView(APIView):
         ticket = TicketService.create_new_user_ticket(
             role=request.user.role,
             created_by_admin=request.user,
-            customer_data={
-                "distributor": request.data.get("distributor"),
-                "full_name": request.data.get("full_name"),
-                "username": request.data.get("username"),
-                "password": request.data.get("password"),
-                "phone": request.data.get("phone"),
-                "location": request.data.get("location"),
-                "vlan": request.data.get("vlan"),
-                "speed": request.data.get("speed"),
-                "notes": request.data.get("notes"),
-            },
-            ticket_data={
-                "availability_time": request.data.get("availability_time"),
-                "note": request.data.get("note"),
-            }
+            customer_data=request.data,
+            ticket_data=request.data
         )
 
         serializer = CustomerListSerializer(ticket.customer)
+
         return Response(
             {
                 "ticket_id": ticket.id,
@@ -57,8 +81,12 @@ class NewUserTicketCreateView(APIView):
                 "customer_profile": serializer.data
             },
             status=status.HTTP_201_CREATED
-
         )
+
+
+# ============================================================
+# CREATE MAINTENANCE
+# ============================================================
 
 class MaintenanceTicketCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -71,17 +99,18 @@ class MaintenanceTicketCreateView(APIView):
             role=request.user.role,
             created_by_admin=request.user,
             customer_id=serializer.validated_data["customer_id"],
-            ticket_data={
-                "priority": serializer.validated_data.get("priority", "NORMAL"),
-                "availability_time": serializer.validated_data.get("availability_time"),
-                "note": serializer.validated_data.get("note"),
-            }
+            ticket_data=serializer.validated_data
         )
 
-        response_serializer = TicketResponseSerializer(ticket)
+        return Response(
+            TicketResponseSerializer(ticket).data,
+            status=status.HTTP_201_CREATED
+        )
 
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
+# ============================================================
+# REPLY
+# ============================================================
 
 class TicketReplyCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -89,28 +118,19 @@ class TicketReplyCreateView(APIView):
     def post(self, request, pk):
         ticket = get_object_or_404(Ticket, pk=pk)
 
-        # ===============================
-        # Handle multipart performed_by
-        # ===============================
         performed_by_raw = request.data.get("performed_by")
 
         if not performed_by_raw:
-            raise ValidationError(
-                "performed_by is required and must contain at least one admin."
-            )
+            raise ValidationError("performed_by is required")
 
         try:
             performed_by_ids = json.loads(performed_by_raw)
         except Exception:
             raise ValidationError("performed_by must be a valid JSON list.")
 
-        # Replace in request data
         data = request.data.copy()
         data["performed_by"] = performed_by_ids
 
-        # ===============================
-        # Create Reply via Service
-        # ===============================
         reply = TicketService.create_ticket_reply(
             role=request.user.role,
             admin=request.user,
@@ -118,112 +138,28 @@ class TicketReplyCreateView(APIView):
             data=data,
         )
 
-        # ===============================
-        # Handle Attachments (Optional)
-        # ===============================
         files = request.FILES.getlist("files")
 
-        attachments_data = []
-
         for file in files:
-            attachment = TicketReplyAttachment.objects.create(
+            TicketReplyAttachment.objects.create(
                 reply=reply,
                 file=file
             )
 
-            attachments_data.append({
-                "id": attachment.id,
-                "file": attachment.file.url,
-"created_at": attachment.created_at,
-            })
-
-        # ===============================
-        # Build Ticket Data
-        # ===============================
-        ticket_data = {
-            "id": ticket.id,
-            "ticket_type": ticket.ticket_type,
-            "status": ticket.status,
-            "priority": ticket.priority,
-            "created_at": ticket.created_at,
-            "updated_at": ticket.updated_at,
-        }
-
-        if ticket.closed_at:
-            ticket_data["closed_at"] = ticket.closed_at
-
-        if ticket.closed_by:
-            ticket_data["closed_by"] = {
-                "id": ticket.closed_by.id,
-                "username": ticket.closed_by.username,
-                "full_name": ticket.closed_by.full_name,
-            }
-
-        # ===============================
-        # Build Replies Data
-        # ===============================
-        replies_data = []
-
-        for r in ticket.replies.order_by("created_at"):
-
-            reply_dict = {
-                "id": r.id,
-                "status": r.status,
-                "performed_by": [
-                    {
-                        "id": admin.id,
-                        "username": admin.username,
-                        "full_name": admin.full_name,
-                    }
-                    for admin in r.performed_by.all()
-                ],
-                "created_at": r.created_at,
-            }
-
-            optional_fields = [
-                "note",
-                "speed_test",
-                "username",
-                "password",
-                "vlan",
-                "speed",
-                "site_name",
-                "device_name",
-            ]
-
-            for field in optional_fields:
-                value = getattr(r, field)
-                if value not in [None, ""]:
-                    reply_dict[field] = value
-
-            # Add attachments if exist
-            reply_attachments = r.attachments.all()
-            if reply_attachments.exists():
-                reply_dict["attachments"] = [
-                    {
-                        "id": a.id,
-                        "file": a.file.url,
-"created_at": a.created_at,                     }
-                    for a in reply_attachments
-                ]
-
-            replies_data.append(reply_dict)
-
-        # ===============================
-        # Final Response
-        # ===============================
         return Response(
-            {
-                "ticket": ticket_data,
-                "replies": replies_data,
-            },
+            {"message": "Reply created successfully"},
             status=status.HTTP_201_CREATED,
         )
+
+
+# ============================================================
+# DETAIL
+# ============================================================
+
 class TicketDetailAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
-
         ticket = get_object_or_404(
             Ticket.objects.prefetch_related(
                 "replies__performed_by",
@@ -232,97 +168,48 @@ class TicketDetailAPIView(APIView):
             pk=pk
         )
 
-        ticket_data = {
-            "id": ticket.id,
-            "ticket_type": ticket.ticket_type,
-            "status": ticket.status,
-            "priority": ticket.priority,
-            "created_at": ticket.created_at,
-            "updated_at": ticket.updated_at,
-        }
-
-        replies_data = []
-
-        for reply in ticket.replies.all().order_by("created_at"):
-
-            reply_dict = {
-                "id": reply.id,
-                "status": reply.status,
-                "created_at": reply.created_at,
-                "performed_by": [
-                    {
-                        "id": admin.id,
-                        "username": admin.username,
-                        "full_name": admin.full_name,
-                    }
-                    for admin in reply.performed_by.all()
-                ],
-            }
-
-            # optional fields
-            optional_fields = [
-                "note",
-                "speed_test",
-                "username",
-                "password",
-                "vlan",
-                "speed",
-                "site_name",
-                "device_name",
-            ]
-
-            for field in optional_fields:
-                value = getattr(reply, field)
-                if value not in [None, ""]:
-                    reply_dict[field] = value
-
-            if reply.attachments.exists():
-                reply_dict["attachments"] = [
-                    {
-                        "id": a.id,
-                        "file": a.file.url,
-                        "created_at": a.created_at,
-                    }
-                    for a in reply.attachments.all()
-                ]
-
-            replies_data.append(reply_dict)
-
-        return Response({
-            "ticket": ticket_data,
-            "replies": replies_data
-        })
+        return Response(TicketResponseSerializer(ticket).data)
 
 
-
-
+# ============================================================
+# LIST (Production Level)
+# ============================================================
 
 class TicketListAPIView(ListAPIView):
-    permission_classes = [IsAuthenticated]
-    serializer_class = TicketCardSerializer
+    serializer_class = TicketResponseSerializer
+    queryset = Ticket.objects.select_related(
+        "customer",
+        "created_by_admin"
+    ).order_by("-created_at")
 
-    def get_queryset(self):
-        return Ticket.objects.all().order_by("-created_at")
+    pagination_class = StandardResultsSetPagination
+
+    filter_backends = [
+        DjangoFilterBackend,
+        SearchFilter,
+        OrderingFilter,
+    ]
+
+    filterset_class = TicketFilter
+
+    search_fields = [
+        "customer_full_name",
+        "customer_phone",
+        "customer_username",
+    ]
+
+    ordering_fields = [
+        "created_at",
+        "status",
+        "priority",
+    ]
+
+    ordering = ["-created_at"]
 
 
-
-class TicketListAPIView(ListAPIView):
-    permission_classes = [IsAuthenticated]
-    serializer_class = TicketCardSerializer
-
-    def get_queryset(self):
-        queryset = Ticket.objects.all().order_by("-created_at")
-
-        status_param = self.request.query_params.get("status")
-        priority_param = self.request.query_params.get("priority")
-
-        if status_param:
-            queryset = queryset.filter(status=status_param)
-
-        if priority_param:
-            queryset = queryset.filter(priority=priority_param)
-
-        return queryset
+# ============================================================
+# ARCHIVE
+# ============================================================
 
 class ArchiveTicketAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -341,15 +228,14 @@ class ArchiveTicketAPIView(APIView):
         ticket.save(update_fields=["is_archived"])
 
         return Response(
-            {
-                "message": "Ticket archived successfully",
-                "ticket_id": ticket.id,
-                "is_archived": ticket.is_archived
-            },
+            {"message": "Ticket archived successfully"},
             status=status.HTTP_200_OK
         )
-    
-    
+
+
+# ============================================================
+# UPDATE
+# ============================================================
 
 class UpdateTicketAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -374,19 +260,19 @@ class UpdateTicketAPIView(APIView):
         serializer.save()
 
         return Response(
-            {
-                "message": "Ticket updated successfully",
-                "ticket_id": ticket.id
-            },
+            {"message": "Ticket updated successfully"},
             status=status.HTTP_200_OK
         )
 
+
+# ============================================================
+# DASHBOARD
+# ============================================================
 
 class DashboardAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-
         data = TicketService.get_dashboard_data()
 
         return Response({
