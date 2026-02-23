@@ -1,7 +1,7 @@
 from django.urls import path
-
-from .views import DistributorCreateView
+from .views import DistributorCreateAPIView, DistributorListAPIView
 
 urlpatterns = [
-    path("", DistributorCreateView.as_view(), name="create-distributor"),
+    path("", DistributorListAPIView.as_view(), name="distributor-list"),
+    path("create/", DistributorCreateAPIView.as_view(), name="create-distributor"),
 ]

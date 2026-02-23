@@ -1,6 +1,8 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from tickets.models import Ticket
+
 from .models import Ticket
 
 
@@ -131,3 +133,52 @@ class TicketResponseSerializer(serializers.ModelSerializer):
             "full_name": obj.created_by_admin.full_name,
             "role": obj.created_by_admin.role,
         }
+
+class TicketCardSerializer(serializers.ModelSerializer):
+    posted_by = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Ticket
+        fields = [
+            "id",
+            "ticket_type",
+            "status",
+            "priority",
+            "created_at",
+            "customer_full_name",
+            "customer_phone",
+            "customer_location",
+            "posted_by",
+        ]
+
+    def get_posted_by(self, obj):
+        if not obj.created_by_admin:
+            return None
+        return {
+            "id": obj.created_by_admin.id,
+            "full_name": obj.created_by_admin.full_name,
+        }
+
+
+class TicketUpdateSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Ticket
+        fields = [
+            "priority",
+            "availability_time",
+            "assigned_admin",
+        ]
+
+
+class CustomerTicketCardSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Ticket
+        fields = [
+            "id",
+            "ticket_type",
+            "status",
+            "priority",
+            "created_at",
+        ]

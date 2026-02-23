@@ -16,8 +16,12 @@ class AuthorizationService:
         return role == "ADMIN"
 
     # ============================================================
-    # Root-only actions
+    # Admin management
     # ============================================================
+
+    @staticmethod
+    def can_manage_admins(role: str) -> bool:
+        return role == "ROOT"
 
     @staticmethod
     def can_create_admin(role: str) -> bool:
@@ -40,32 +44,16 @@ class AuthorizationService:
         return role in ["ROOT", "ADMIN"]
 
     @staticmethod
-    def can_close_ticket(role: str) -> bool:
-        return role in ["ROOT", "ADMIN"]
-
-    @staticmethod
     def can_delete_ticket(role: str) -> bool:
         return role == "ROOT"
 
     # ============================================================
-    # Snapshot protection
-    # ============================================================
-
-    @staticmethod
-    def can_edit_customer_snapshot(role: str) -> bool:
-        """
-        Snapshot data must NEVER be editable after ticket creation.
-        """
-        return False
-
-    # ============================================================
-    # Status transitions (Lifecycle)
+    # Lifecycle
     # ============================================================
 
     @staticmethod
     def can_change_status(role: str, from_status: str, to_status: str) -> bool:
 
-        # Only Admin or Root can change status
         if role not in ["ROOT", "ADMIN"]:
             return False
 
@@ -76,20 +64,7 @@ class AuthorizationService:
             "DONE": ["CLOSED"],
         }
 
-    @staticmethod
-    def is_root(user):
-        return user.role == "ROOT"
-
-    @staticmethod
-    def can_manage_distributors(user):
-        return user.role == "ROOT"
-        # Lifecycle validation
         if to_status not in allowed_transitions.get(from_status, []):
             return False
-
-        # If needed, enforce stricter rule:
-        # Uncomment this if ONLY ROOT can close
-        # if from_status == "DONE" and to_status == "CLOSED":
-        #     return role == "ROOT"
 
         return True

@@ -11,19 +11,8 @@ class Customer(models.Model):
     )
 
     full_name = models.CharField(max_length=255)
-
-    username = models.CharField(
-    max_length=150,
-    null=True,
-    blank=True
-)
-
-    password = models.CharField(
-    max_length=255,
-    null=True,
-    blank=True
-)
-
+    username = models.CharField(max_length=150, unique=True)
+    password = models.CharField(max_length=255)
 
     phone = models.CharField(max_length=20)
     location = models.CharField(max_length=255)

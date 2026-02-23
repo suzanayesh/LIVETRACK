@@ -1,4 +1,6 @@
-from django.core.exceptions import ValidationError
+import logging
+
+from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
@@ -6,8 +8,10 @@ from admins.models import Admin
 from customers.models import Customer
 from distributors.models import Distributor
 from livetrack1.services.authorization_service import AuthorizationService
-from ticket_replies.models import TicketReply, TicketReplyAttachment
+from ticket_replies.models import TicketReply
 from tickets.models import Ticket
+
+logger = logging.getLogger("tickets")
 
 
 class TicketService:
@@ -26,7 +30,7 @@ class TicketService:
     ) -> Ticket:
 
         if not AuthorizationService.can_create_ticket(role):
-            raise PermissionError("Not allowed to create tickets")
+            raise PermissionDenied("Not allowed to create tickets")
 
         distributor = Distributor.objects.get(id=customer_data["distributor"])
 
@@ -78,16 +82,14 @@ class TicketService:
     ) -> Ticket:
 
         if not AuthorizationService.can_create_ticket(role):
-            raise PermissionError("Not allowed to create tickets")
+            raise PermissionDenied("Not allowed to create tickets")
 
         try:
             customer = Customer.objects.get(id=customer_id)
         except Customer.DoesNotExist:
             raise ValidationError("Customer does not exist")
 
-        note_value = ticket_data.get("note")
-        if note_value in ["", None]:
-            note_value = None
+        note_value = ticket_data.get("note") or None
 
         ticket = Ticket.objects.create(
             ticket_type="MAINTENANCE",
@@ -110,7 +112,7 @@ class TicketService:
         )
 
         return ticket
-# =======
+
     # ============================================================
     # CREATE REPLY (Unified Reply + Status Update)
     # ============================================================
@@ -124,9 +126,6 @@ class TicketService:
         data: dict
     ):
 
-        # ===============================
-        # Validate performed_by
-        # ===============================
         performed_by_ids = data.get("performed_by")
 
         if not performed_by_ids or not isinstance(performed_by_ids, list):
@@ -141,9 +140,6 @@ class TicketService:
                 "One or more admins in performed_by do not exist."
             )
 
-        # ===============================
-        # Determine status (Flexible Mode)
-        # ===============================
         new_status = data.get("status") or ticket.status
 
         allowed_statuses = [
@@ -155,24 +151,12 @@ class TicketService:
         ]
 
         if new_status not in allowed_statuses:
-            raise ValidationError(
-                "Invalid status value. Allowed statuses: "
-                "PENDING, ACCEPTED, IN_PROGRESS, DONE, CLOSED."
-            )
+            raise ValidationError("Invalid status value.")
 
-        # ===============================
-        # Prevent reply on closed ticket
-        # ===============================
         if ticket.status == "CLOSED":
-            raise PermissionDenied(
-                "This ticket is already closed. No further replies are allowed."
-            )
+            raise PermissionDenied("This ticket is already closed.")
 
-        # ===============================
-        # Lifecycle validation for ADMIN
-        # ===============================
         if role == "ADMIN":
-
             allowed_transitions = {
                 "PENDING": ["ACCEPTED"],
                 "ACCEPTED": ["IN_PROGRESS"],
@@ -183,34 +167,37 @@ class TicketService:
             if new_status != ticket.status:
                 if new_status not in allowed_transitions.get(ticket.status, []):
                     raise PermissionDenied(
-                        f"Invalid status transition from {ticket.status} to {new_status}. "
-                        "ADMIN must follow sequential lifecycle: "
-                        "PENDING → ACCEPTED → IN_PROGRESS → DONE."
+                        f"Invalid status transition from {ticket.status} to {new_status}."
                     )
 
-        # ===============================
-        # Only ROOT can close
-        # ===============================
         if new_status == "CLOSED" and role != "ROOT":
             raise PermissionDenied(
                 "Only ROOT users are allowed to close tickets."
             )
 
         # ===============================
-        # Update ticket status if changed
+        # Update ticket status + Logging
         # ===============================
         if new_status != ticket.status:
+            old_status = ticket.status
             ticket.status = new_status
             ticket.save(update_fields=["status", "updated_at"])
+
+            logger.info(
+                f"Ticket {ticket.id} status changed "
+                f"from {old_status} to {new_status} "
+                f"by {admin.username}"
+            )
 
             if new_status == "CLOSED":
                 ticket.closed_at = timezone.now()
                 ticket.closed_by = admin
                 ticket.save(update_fields=["closed_at", "closed_by"])
 
-        # ===============================
-        # Create reply
-        # ===============================
+                logger.info(
+                    f"Ticket {ticket.id} closed by {admin.username}"
+                )
+
         reply = TicketReply.objects.create(
             ticket=ticket,
             admin=admin,
@@ -228,3 +215,44 @@ class TicketService:
         reply.performed_by.set(performers)
 
         return reply
+
+    # ============================================================
+    # ADMIN PROFILE DATA
+    # ============================================================
+
+    @staticmethod
+    def get_admin_profile_data(admin):
+
+        tickets = Ticket.objects.filter(
+            Q(created_by_admin=admin) |
+            Q(replies__performed_by=admin)
+        ).distinct().order_by("-created_at")
+
+        return {
+            "admin": admin,
+            "tickets": tickets,
+            "total_tickets": tickets.count(),
+        }
+
+    # ============================================================
+    # DASHBOARD DATA
+    # ============================================================
+
+    @staticmethod
+    def get_dashboard_data():
+
+        stats = Ticket.objects.aggregate(
+            pending=Count("id", filter=Q(status="PENDING")),
+            accepted=Count("id", filter=Q(status="ACCEPTED")),
+            in_progress=Count("id", filter=Q(status="IN_PROGRESS")),
+            done=Count("id", filter=Q(status="DONE")),
+        )
+
+        recent_tickets = Ticket.objects.filter(
+            status="PENDING"
+        ).order_by("-created_at")[:6]
+
+        return {
+            "stats": stats,
+            "recent": recent_tickets,
+        }

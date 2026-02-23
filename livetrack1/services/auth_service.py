@@ -11,8 +11,9 @@ class AuthService:
         if not user:
             raise Exception("Invalid credentials")
 
+        # ✅ منع دخول الحساب الموقوف
         if not user.is_active:
-            raise Exception("User is inactive")
+            raise Exception("This account has been deactivated")
 
         refresh = RefreshToken.for_user(user)
         refresh["role"] = user.role

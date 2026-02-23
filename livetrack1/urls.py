@@ -10,4 +10,7 @@ urlpatterns = [
     path("api/", include("tickets.urls")),
 path("api/tickets/", include("tickets.urls")),
 path("api/distributors/", include("distributors.urls")),
+path("api/distributors/", include("distributors.urls")),
+
+path("api/customers/", include("customers.urls")),  # ← أضيفي هذا
 ]

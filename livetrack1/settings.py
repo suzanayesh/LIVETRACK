@@ -108,7 +108,40 @@ DATABASES = {
         'PORT': os.getenv('DB_PORT'),
     }
 }
+# Ensure logs directory exists
+# =========================
+# Logging Setup
+# =========================
+LOGS_DIR = BASE_DIR / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
 
+    "formatters": {
+        "standard": {
+            "format": "[{asctime}] {levelname} {name} | {message}",
+            "style": "{",
+        },
+    },
+
+    "handlers": {
+        "file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": LOGS_DIR / "app.log",
+            "formatter": "standard",
+        },
+    },
+
+    "loggers": {
+        "tickets": {
+            "handlers": ["file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
 # =========================
 # Password validation
 # =========================
